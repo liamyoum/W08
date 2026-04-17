@@ -1,138 +1,205 @@
-# 📘 Docker + VSCode DevContainer 기반 C 개발 환경 구축 가이드 (WebProxyLab)
+# C 언어로 구현하는 Web Server & Proxy Lab
 
-이 문서는 **Windows**와 **macOS** 사용자가 Docker와 VSCode DevContainer 기능을 활용하여 C 개발 및 디버깅 환경을 빠르게 구축할 수 있도록 도와줍니다.
+이 저장소는 C 언어로 웹 서버와 프록시 서버를 직접 구현해 보며 네트워크 프로그래밍의 핵심 개념을 익히는 과제용 레포지토리입니다. 중심 주제는 소켓 프로그래밍이며, BSD 소켓 API부터 HTTP 요청/응답 처리, 정적/동적 컨텐츠 제공, 그리고 프록시의 동시성 및 캐시까지 단계적으로 다룹니다.
 
-[**주의**] 지난 주차와 다른 점만 하시려면 4장부터 7장만 보세요.
-[**주의**] webproxy-lab의 경우 tiny 웹 서버와 proxy 서버 두가지를 구현해야 해서 두가지 debugging 설정을 제공합니다. 이에 대한 설명은 7장에서 설명하니 꼭 읽어보시기 바랍니다.
+핵심 실습은 `webproxy-lab/tiny`의 Tiny 웹 서버를 완성하고, 이후 `webproxy-lab/proxy.c`에서 프록시 서버를 구현하는 흐름으로 진행합니다.
 
----
+## 학습 키워드
 
-## 1. Docker란 무엇인가요?
+- BSD Socket
+- IP
+- TCP
+- HTTP
+- File Descriptor
+- DNS
 
-**Docker**는 애플리케이션을 어떤 컴퓨터에서든 **동일한 환경에서 실행**할 수 있게 도와주는 **가상화 플랫폼**입니다.  
+## GOAL
 
-Docker는 다음 구성요소로 이루어져 있습니다:
+소켓 이해 → 에코 서버/클라이언트 실습 → Tiny 웹 서버 구현 → CS:APP 11장 연습문제 풀이 → Proxy 과제 도전
 
-- **Docker Engine**: 컨테이너를 실행하는 핵심 서비스
-- **Docker Image**: 컨테이너 생성에 사용되는 템플릿 (레시피 📃)
-- **Docker Container**: 이미지를 기반으로 생성된 실제 실행 환경 (요리 🍜)
+최종 목표는 아래를 직접 구현하고 설명할 수 있는 상태에 도달하는 것입니다.
 
-### ✅ AWS EC2와의 차이점
+- 소켓을 사용해 요청과 응답이 오가는 간단한 클라이언트/서버 구조를 이해한다.
+- HTTP 프로토콜을 이해하고 클라이언트의 request를 받아 response를 보내는 웹 서버를 구현한다.
+- Tiny 웹 서버의 전체 흐름을 직접 완성한다.
+- 브라우저와 웹 서버 사이에서 동작하는 프록시 서버를 구현한다.
 
-| 구분 | EC2 같은 VM | Docker 컨테이너 |
-|------|-------------|-----------------|
-| 실행 단위 | OS 포함 전체 | 애플리케이션 단위 |
-| 실행 속도 | 느림 (수십 초 이상) | 매우 빠름 (거의 즉시) |
-| 리소스 사용 | 무거움 | 가벼움 |
+## 권장 학습 순서
 
----
+1. 소켓이 무엇인지 공부합니다.
+2. 소켓을 이용해 간단한 에코 클라이언트/서버를 만들어 봅니다.
+3. HTTP 프로토콜의 request/response 구조를 이해합니다.
+4. `webproxy-lab/tiny/tiny.c`를 바탕으로 Tiny 웹 서버를 완성합니다.
+5. `webproxy-lab/tiny/cgi-bin/adder.c`를 포함한 CGI 동작을 이해합니다.
+6. CS:APP 11장 연습문제 `11.6c`, `11.7`, `11.9`, `11.10`, `11.11` 중 3문제 이상 풉니다.
+7. `proxy.c`를 완성하여 순차 처리, 병렬 처리, 캐시 기능을 구현합니다.
 
-## 2. VSCode DevContainer란 무엇인가요?
+어려우면 CS:APP(Computer Systems: A Programmer's Perspective) 11장을 보면서 천천히 따라가는 방식으로 진행하면 됩니다. 이 과제에서는 교재 11장에 등장하는 Tiny 웹 서버 기능을 모두 구현하는 것이 중요합니다.
 
-**DevContainer**는 VSCode에서 Docker 컨테이너를 **개발 환경**처럼 사용할 수 있게 해주는 기능입니다.
+## 웹 서버는 어떤 기능들의 모음인가?
 
-- 코드를 실행하거나 디버깅할 때 **컨테이너 내부 환경에서 동작**
-- 팀원 간 **환경 차이 없이 동일한 개발 환경 구성** 가능
-- `.devcontainer` 폴더에 정의된 설정을 VSCode가 읽어 자동 구성
+Tiny를 구현할 때는 웹 서버를 하나의 큰 프로그램이 아니라 여러 기능의 조합으로 보는 것이 좋습니다.
 
----
+- TCP 연결을 수립하기 위한 listening socket 생성
+- 클라이언트 연결 수락과 연결별 file descriptor 관리
+- HTTP request line 및 header 파싱
+- URI 분석 후 정적 컨텐츠와 동적 컨텐츠 구분
+- 파일 읽기와 응답 본문 전송
+- CGI 프로그램 실행을 통한 동적 응답 생성
+- 오류 상황에 대한 적절한 HTTP 에러 응답 전송
 
-## 3. Docker Desktop 설치하기
+이 과정에서 BSD 소켓, 파일 입출력, 프로세스/디스크립터, 문자열 처리, DNS/호스트 이름 처리 개념이 자연스럽게 연결됩니다.
 
-1. Docker 공식 사이트에서 설치 파일 다운로드:  
-   👉 [https://www.docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)
+## 과제 범위
 
-2. 설치 후 Docker Desktop 실행  
-   - Windows: Docker 아이콘이 트레이에 떠야 함  
-   - macOS: 상단 메뉴바에 Docker 아이콘 확인
+### 1. Tiny 웹 서버 완성
 
----
+아래 파일을 중심으로 Tiny 웹 서버를 완성합니다.
 
-## 4. 프로젝트 파일 다운로드 (히스토리 없이)
+- `webproxy-lab/tiny/tiny.c`
+- `webproxy-lab/tiny/cgi-bin/adder.c`
 
-터미널(CMD, PowerShell, zsh 등)에서 아래 명령어로 프로젝트 폴더만 내려받습니다:
+Tiny는 GET 요청을 처리하며, 정적 파일과 CGI 기반 동적 컨텐츠를 모두 다룹니다. 레포에는 테스트용 정적 파일(`home.html`, `godzilla.jpg`, `godzilla.gif`)과 CGI 예제(`cgi-bin/adder.c`)가 포함되어 있습니다.
 
-```bash
-git clone --depth=1 https://github.com/krafton-jungle/webproxy_lab_docker.git
-```
+### 2. CS:APP 11장 연습문제
 
-- `--depth=1` 옵션은 git commit 히스토리를 생략하고 **최신 파일만 가져옵니다.**
+다음 문제 중 3문제 이상 풉니다.
 
-### 📂 다운로드 후 폴더 구조 설명
+- `11.6c`
+- `11.7`
+- `11.9`
+- `11.10`
+- `11.11`
 
-```
+### 3. Proxy 서버 구현
+
+Tiny를 완성한 뒤 아래 파일에서 프록시 서버 과제에 도전합니다.
+
+- `webproxy-lab/proxy.c`
+
+프록시는 브라우저와 웹 서버 사이에 위치합니다.
+
+- 브라우저는 웹 서버 대신 프록시에 접속합니다.
+- 프록시는 브라우저의 요청을 웹 서버로 포워딩합니다.
+- 웹 서버의 응답을 받은 뒤, 프록시는 그 응답을 다시 브라우저에 전달합니다.
+
+구현 목표는 다음 3가지입니다.
+
+1. 순차적 요청 처리
+2. 병렬적 요청 처리
+3. 요청 캐시
+
+## 레포지토리 구조
+
+```text
 webproxy_lab_docker/
-├── .devcontainer/
-│   ├── devcontainer.json      # VSCode에서 컨테이너 환경 설정
-│   └── Dockerfile             # C 개발 환경 이미지 정의
-│
-├── .vscode/
-│   ├── launch.json            # 디버깅 설정 (F5 실행용)
-│   └── tasks.json             # 컴파일 자동화 설정
-│
-├── webproxy-lab
-│   ├── tiny                    # tiny 웹 서버 구현 폴더
-│   │  ├── cgi-bin              # tiny 웹 서버를 테스트하기 위한 동적 컨텐츠를 구현하기 위한 폴더
-│   │  ├── home.html            # tiny 웹 서버를 테스트하기 위한 정적 HTML 파일
-│   │  ├── tiny.c               # tiny 웹 서버 구현 파일
-│   │  └── Makefile             # tiny 웹 서버를 컴파일하기 위한 파일
-│   ├── Makefile                # proxy 웹 서버를 컴파일하기 위한 파일
-│   └── proxy.c                 # proxy 웹 서버 구현 파일
-│
-└── README.md  # 설치 및 사용법 설명 문서
+├── README.md
+└── webproxy-lab
+    ├── Makefile
+    ├── README.md
+    ├── csapp.c
+    ├── csapp.h
+    ├── driver.sh
+    ├── free-port.sh
+    ├── nop-server.py
+    ├── port-for-user.pl
+    ├── proxy.c
+    └── tiny
+        ├── Makefile
+        ├── README
+        ├── csapp.c
+        ├── csapp.h
+        ├── godzilla.gif
+        ├── godzilla.jpg
+        ├── home.html
+        ├── tiny.c
+        └── cgi-bin
+            ├── Makefile
+            └── adder.c
 ```
----
 
-## 5. VSCode에서 해당 프로젝트 폴더 열기
+## 빌드 및 실행
 
-1. VSCode를 실행
-2. `파일 → 폴더 열기`로 방금 클론한 `webproxy_lab_docker` 폴더를 선택
-
----
-
-## 6. 개발 컨테이너: 컨테이너에서 열기
-
-1. VSCode에서 `Ctrl+Shift+P` (Windows/Linux) 또는 `Cmd+Shift+P` (macOS)를 누릅니다.
-2. 명령어 팔레트에서 `Dev Containers: Reopen in Container`를 선택합니다.
-3. 이후 컨테이너가 자동으로 실행되고 빌드됩니다. 처음 컨테이너를 열면 빌드하는 시간이 오래걸릴 수 있습니다. 빌드 후, 프로젝트가 **컨테이너 안에서 실행됨**.
-
----
-
-## 7. C 파일에 브레이크포인트 설정 후 디버깅 (F5)
-
-이제 본격적으로 문제를 풀 시간입니다. `webproxy-lab/README.md` 파일을 참조하셔서 webproxy 문제를 풀어보세요.
-구현 순서는 tiny 웹서버(`webproxy-lab/tiny/tiny.c`)를 CSApp책에 있는 코드를 이용해서 구현하고, proxy서버(`webproxy-lab/proxy.c`)를 구현한 뒤에 최종 `webproxy-lab/mdriver`를 실행하여 70점 만점을 목표로 구현하세요.
-
-C 언어로 문제를 풀다가 디버깅이 필요하시면 소스코드에 BreakPoint를 설정한 뒤에 키보드에서 `F5`를 눌러 디버깅을 시작할 수 있습니다. 디버깅은 tiny 서버와 proxy 서버용 2가지로 제공되며 각각 "Debug Tiny Server", "Debug Proxy Server" 이름을 가집니다. 두가지 중 원하는 디버깅 설정을 선택한 뒤에 `F5`를 누르면 해당 서버가 디버깅모드로 실행됩니다. 
-
-* 기본적으로 "Debug Tiny Server"는 tiny 서버를 실행할때 포트를 `8000`을, "Debug Proxy Server"는 `4500`를  사용합니다. 해당 포트를 이미 다른 프로세스가 사용중이라면 새로운 포트로(`launch.json`파일에서 가능) 변경한 뒤에 디버깅을 진행합니다.
-
-
----
-
-## 8. 새로운 Git 리포지토리에 Commit & Push 하기
-
-금주 프로젝트를 개인 Git 리포와 같은 다른 리포지토리에 업로드하려면, 기존 Git 연결을 제거하고 새롭게 초기화해야 합니다.
-
-### ✅ 완전히 새로운 Git 리포로 업로드하는 방법
-
-아래 명령어를 순서대로 실행하세요:
+### Tiny 웹 서버 빌드
 
 ```bash
-rm -rf .git
-git init
-git remote add origin https://github.com/myusername/my-new-repo.git
-git add .
-git commit -m "Clean start"
-git push -u origin main
+cd webproxy-lab/tiny
+make
 ```
 
-### 📌 설명
+### Tiny 웹 서버 실행
 
-- `rm -rf .git`: 기존 Git 기록과 연결을 완전히 삭제합니다.
-- `git init`: 현재 폴더를 새로운 Git 리포지토리로 초기화합니다.
-- `git remote add origin ...`: 새로운 리포지토리 주소를 origin으로 등록합니다.
-- `git add .` 및 `git commit`: 모든 파일을 커밋합니다.
-- `git push`: 새로운 리포에 최초 업로드(Push)합니다.
+```bash
+./tiny 8000
+```
 
-이 과정을 거치면 기존 리포와의 연결은 완전히 제거되고, **새로운 독립적인 프로젝트로 관리**할 수 있습니다.
+테스트 예시:
+
+```bash
+curl http://localhost:8000/
+curl http://localhost:8000/home.html
+curl "http://localhost:8000/cgi-bin/adder?a=1&b=2"
+```
+
+### Proxy 서버 빌드
+
+```bash
+cd webproxy-lab
+make
+```
+
+### Proxy 서버 실행
+
+```bash
+./proxy 4500
+```
+
+프록시 테스트 예시:
+
+```bash
+curl -x http://localhost:4500 http://localhost:8000/home.html
+```
+
+### 사용 가능한 포트 찾기
+
+포트 충돌이 나면 아래 스크립트를 활용할 수 있습니다.
+
+```bash
+cd webproxy-lab
+./free-port.sh
+./port-for-user.pl <userID>
+```
+
+`free-port.sh`는 현재 비어 있는 포트를 찾고, `port-for-user.pl`은 사용자별로 충돌 가능성이 낮은 포트를 계산해 줍니다.
+
+## 검증
+
+프록시 구현 검증은 `driver.sh`를 기준으로 진행할 수 있습니다.
+
+```bash
+cd webproxy-lab
+./driver.sh
+```
+
+자동 채점 스크립트는 아래 항목을 확인합니다.
+
+- Basic: 프록시를 통해 가져온 결과가 원본 Tiny 서버 응답과 같은지 확인
+- Concurrency: 응답이 지연되는 서버가 있어도 다른 요청을 처리할 수 있는지 확인
+- Cache: 원 서버가 내려간 뒤에도 캐시된 객체를 제공할 수 있는지 확인
+
+현재 스크립트 기준 배점은 총 70점입니다.
+
+- Basic 40점
+- Concurrency 15점
+- Cache 15점
+
+## 참고 자료
+
+- CS:APP Chapter 11
+- [Proxy Lab PDF](http://csapp.cs.cmu.edu/3e/proxylab.pdf)
+- `webproxy-lab/README.md`
+- `webproxy-lab/tiny/README`
+
+## 정리
+
+이 과제의 핵심은 단순히 서버를 띄우는 것이 아니라, 네트워크 프로그램이 실제로 어떻게 요청을 받고 해석하고 전달하는지 직접 구현해 보는 데 있습니다. Tiny 웹 서버를 완성하고, 연습문제를 풀며 개념을 다진 뒤, 순차 처리, 병렬 처리, 캐시를 갖춘 프록시 서버까지 확장해 보세요.
